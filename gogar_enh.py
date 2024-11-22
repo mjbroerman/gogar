@@ -22,21 +22,31 @@ if os.name == 'nt':
     kernel32 = ctypes.windll.kernel32
     kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
 
+# Helper function to format sets without braces and commas
 def format_set(s):
     if not s:
-        return '{}'
+        return ''
     elements = sorted(s)
-    return '{\n  ' + ',\n  '.join(elements) + '\n}'
+    return '\n' + '\n'.join('  ' + e for e in elements)
 
 def format_incompatibilities(incs):
     if not incs:
         return ''
-    return '\n'.join(format_set(inc) for inc in incs)
+    formatted_incs = []
+    for inc in incs:
+        formatted_inc = '\n'.join('  ' + s for s in sorted(inc))
+        formatted_incs.append(formatted_inc)
+    return '\n\n'.join(formatted_incs)
 
 def format_inferences(infs):
     if not infs:
         return ''
-    return '\n'.join(str(inf) for inf in sorted(infs, key=lambda x: str(x)))
+    formatted_infs = []
+    for inf in sorted(infs, key=lambda x: str(x)):
+        premises = '\n'.join('  ' + p for p in sorted(inf.premises))
+        conclusion = '  |- ' + inf.conclusion
+        formatted_infs.append(f"{premises}\n{conclusion}")
+    return '\n\n'.join(formatted_infs)
 
 # ANSI color codes
 RED = '\033[31m'
@@ -56,8 +66,8 @@ class Inference:
         return hash((self.premises, self.conclusion))
 
     def __str__(self):
-        premises_str = ', '.join(sorted(self.premises))
-        return f"{{{premises_str}}} |- {self.conclusion}"
+        premises_str = '\n'.join('  ' + p for p in sorted(self.premises))
+        return f"{premises_str}\n  |- {self.conclusion}"
 
     def __repr__(self):
         return str(self)
@@ -83,6 +93,7 @@ class Challenge:
 # Define the Agent class
 class Agent:
     def __init__(self, name,
+                 intelligence=100,
                  committive=[[["A is red"], "A is colored"],
                              [["A is blue"], "A is colored"],
                              [["A is green"], "A is colored"]],
@@ -93,7 +104,7 @@ class Agent:
                                 ["A is blue", "A is green"],
                                 ["A is edible", "A is poisonous"]]):
         self.name = name
-        self.intelligence = 100
+        self.intelligence = intelligence
         self.commitments_avowed = set()
         self.incompatibilities = [frozenset(inc) for inc in incompatibles]
         self.committive_inferences = {Inference(premises, conclusion)
@@ -124,11 +135,11 @@ class Agent:
     def __str__(self):
         return (f"{self.name}\n"
                 f"Intelligence = {self.intelligence}\n"
-                f"Commitments avowed:\n{format_set(self.commitments_avowed)}\n"
+                f"Commitments avowed:{format_set(self.commitments_avowed)}\n"
                 f"Sets taken to be incompatible:\n{format_incompatibilities(self.incompatibilities)}\n"
                 f"Committive inferences accepted:\n{format_inferences(self.committive_inferences)}\n"
                 f"Permissive inferences accepted:\n{format_inferences(self.permissive_inferences)}\n"
-                f"Challenges issued: {self.challenges_issued}\n")
+                f"Challenges issued:\n{self.challenges_issued}\n")
 
     def __repr__(self):
         return str(self)
@@ -224,16 +235,17 @@ class Game:
         coms = self.commitments(scorekeeper, other)
         ents = self.entitlements(scorekeeper, other)
         incs = self.incompatibles(scorekeeper, other)
-        return (f"\nCommitments:\n{format_set(coms)}\n"
-                f"Entitlements:\n{format_set(ents)}\n"
-                f"Incompatibles:\n{format_incompatibilities(incs)}\n\n")
+        return (f"\n{scorekeeper.name}'s score on {other.name}:\n"
+                f"Commitments:{format_set(coms)}\n"
+                f"Entitlements:{format_set(ents)}\n"
+                f"Incompatibles:\n{format_incompatibilities(incs)}\n")
 
     def score_all(self):
         agents = sorted(self.agents, key=lambda a: a.name)
         output = ""
         for sk in agents:
             for ot in agents:
-                output += f"{sk.name}'s score on {ot.name}:" + self.score(sk, ot)
+                output += self.score(sk, ot)
         return output
 
     def startup_message(self):
@@ -248,7 +260,8 @@ class Game:
 
     def help_message(self):
         return (
-            "\nlist agents\nadd agent Sal\nremove agent Bob\nnew game\nscore\nBob's score on Ann\n"
+            "\nlist agents\nadd agent Sal [with intelligence 50]\nremove agent Bob\n"
+            "set intelligence of Bob to 50\nnew game\nscore\nBob's score on Ann\n"
             "Bob asserts A is red\nBob disavows A is red\nAnn challenges Bob's entitlement to A is red\n"
             "Ann abandons his challenge to Bob's entitlement to A is red\n"
             "Bob adds committive inference: {A is red; A is small} |- A is dangerous\n"
@@ -274,14 +287,25 @@ class Game:
         # List agents
         elif re.match(r'^\s*(list)?\s*agents\s*$', inp):
             result = '\n'.join(str(agent) for agent in self.agents) + '\n'
-        # Add agent
-        elif match := re.match(r'^\s*add\s*agent\s+(\w+)\s*$', inp):
+        # Add agent with optional intelligence
+        elif match := re.match(r'^\s*add\s*agent\s+(\w+)(?:\s+with\s+intelligence\s+(\d+))?\s*$', inp):
             name = match.group(1)
+            intelligence = int(match.group(2)) if match.group(2) else 100  # default intelligence
             if self.agent_named(name):
                 result = f"An agent named {name} already exists.\n"
             else:
-                self.agents.add(Agent(name))
-                result = f"Agent {name} added.\n"
+                agent = Agent(name, intelligence=intelligence)
+                self.agents.add(agent)
+                result = f"Agent {name} added with intelligence {intelligence}.\n"
+        # Set intelligence of an existing agent
+        elif match := re.match(r'^\s*set\s+intelligence\s+of\s+(\w+)\s+to\s+(\d+)\s*$', inp):
+            agent_name, intelligence = match.groups()
+            agent = self.agent_named(agent_name)
+            if not agent:
+                result = f"Agent {agent_name} not found. Try: list agents\n"
+            else:
+                agent.intelligence = int(intelligence)
+                result = f"Set intelligence of {agent_name} to {intelligence}.\n"
         # Remove agent
         elif match := re.match(r'^\s*remove\s*agent\s+(\w+)\s*$', inp):
             name = match.group(1)
@@ -433,7 +457,7 @@ class Game:
             agent_name = match.group(1)
             agent = self.agent_named(agent_name)
             if agent:
-                result = str(agent) + self.score(agent, agent)
+                result = str(agent)
             else:
                 result = "Command not recognized. Try: help\n"
         else:
